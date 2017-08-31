@@ -46,17 +46,24 @@ int sceAppUtilSaveDataDataSave_patched(SceAppUtilSaveDataFileSlot* slot, SceAppU
 	uint32_t fileIdx = 0;
 	while (fileIdx < fileNum){
 		sprintf(fname, "ux0:/data/savegames/%s/SLOT%u/%s", titleid, slot->id, files[fileIdx].filePath);
-		kuIoOpen(fname, SCE_O_WRONLY | SCE_O_CREAT, &fd);
-		kuIoLseek(fd, files[fileIdx].offset, SEEK_SET);
-		int i = 0;
-		uint8_t* save_buf = (uint8_t*)files[fileIdx].buf;
-		while (i < files->bufSize){
-			int len = (i + BUF_SIZE > files[fileIdx].bufSize) ? files[fileIdx].bufSize - i : BUF_SIZE;
-			kuIoWrite(fd, &save_buf[i], len);
-			i += len;
+		switch (files[fileIdx].mode){
+			case SCE_APPUTIL_SAVEDATA_DATA_SAVE_MODE_FILE:
+				kuIoOpen(fname, SCE_O_WRONLY | SCE_O_CREAT, &fd);
+				kuIoLseek(fd, files[fileIdx].offset, SEEK_SET);
+				int i = 0;
+				uint8_t* save_buf = (uint8_t*)files[fileIdx].buf;
+				while (i < files->bufSize){
+					int len = (i + BUF_SIZE > files[fileIdx].bufSize) ? files[fileIdx].bufSize - i : BUF_SIZE;
+					kuIoWrite(fd, &save_buf[i], len);
+					i += len;
+				}
+				kuIoClose(fd);
+				break;
+			default:
+				kuIoMkdir(fname);
+				break;
 		}
 		fileIdx++;
-		kuIoClose(fd);
 	}
 	
 	// Writing slot param file
@@ -127,7 +134,14 @@ int sceAppUtilSaveDataDataRemove_patched(SceAppUtilSaveDataFileSlot* slot, SceAp
 	int fileIdx = 0;
 	while (fileIdx < fileNum){
 		sprintf(fname, "ux0:/data/savegames/%s/SLOT%u/%s", titleid, slot->id, files[fileIdx].dataPath);
-		kuIoRemove(fname);
+		switch (files[fileIdx].mode){
+			case SCE_APPUTIL_SAVEDATA_DATA_REMOVE_MODE_DEFAULT:
+				kuIoRemove(fname);
+				break;
+			default:
+				kuIoRmdir(fname);
+				break;
+		}
 		fileIdx++;
 	}
 	
