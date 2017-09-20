@@ -30,10 +30,11 @@ add_executable(SavedataPlus
 )
 
 target_link_libraries(SavedataPlus
-  taihen_stub
-  SceLibKernel_stub_weak
-  SceAppMgr_stub_weak
-  kuio_stub
+  taihenForKernel_stub
+  SceLibKernel_stub
+  SceSysmemForDriver_stub
+  SceThreadmgrForDriver_stub
+  SceIofilemgrForDriver_stub
   k
   gcc
 )
@@ -42,6 +43,6 @@ set_target_properties(SavedataPlus
   PROPERTIES LINK_FLAGS "-nostdlib"
 )
 
-vita_create_self(SavedataPlus.suprx SavedataPlus
+vita_create_self(SavedataPlus.skprx SavedataPlus
   CONFIG ${CMAKE_SOURCE_DIR}/SavedataPlus.yml
 )
