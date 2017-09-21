@@ -124,7 +124,7 @@ SceUID ksceIoOpen_patched(const char* file, int flags, SceMode mode) {
 	if (strncmp(file, "savedata0:", 10) == 0){
 		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		ret = openFile(fname, flags);
-		LOG("Redirecting %s to %s via ksceIoOpen (flags: 0x%X, fd: %d)", file, fname, flags, ret);
+		LOG("Redirecting %s to %s via ksceIoOpen (flags: 0x%X, fd: 0x%X)", file, fname, flags, ret);
 	}else ret = TAI_CONTINUE(SceUID, refs[0], file, flags, mode);
 	
 	return ret;
@@ -139,7 +139,7 @@ SceUID ksceIoOpen2_patched(SceUID pid, const char* file, int flags, SceMode mode
 	if (strncmp(file, "savedata0:", 10) == 0){
 		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		ret = openFile(fname, flags);
-		LOG("Redirecting %s to %s via ksceIoOpen2 (flags: 0x%X, fd: %d)", file, fname, flags, ret);
+		LOG("Redirecting %s to %s via ksceIoOpen2 (flags: 0x%X, fd: 0x%X)", file, fname, flags, ret);
 	}else ret = TAI_CONTINUE(SceUID, refs[1], pid, file, flags, mode);
 	
 	return ret;
@@ -159,8 +159,6 @@ SceUID ksceKernelLaunchApp_patched(char *tid, uint32_t flags, char *path, void *
 		int i;
 		for (i=0;i<=9;i++){
 			sprintf(fname, "ux0:/data/savegames/%s/SLOT%d", tid, i);
-			createDir(fname);
-			sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/sce_sys", tid, i);
 			createDir(fname);
 		}
 	}
