@@ -5,7 +5,7 @@
 #include <libk/stdarg.h>
 #include <libk/string.h>
 
-#define HOOKS_NUM   5      // Hooked functions num
+#define HOOKS_NUM   6      // Hooked functions num
 
 static uint8_t current_hook = 0;
 static SceUID hooks[HOOKS_NUM];
@@ -17,6 +17,7 @@ static uint8_t workslot = 0;
 #define OPEN_FILE   0
 #define REMOVE_FILE 1
 #define REMOVE_DIR  2
+#define CREATE_DIR  3
 
 static SceUID io_thd_id, io_request_mutex, io_result_mutex;
 
@@ -47,6 +48,9 @@ static int io_thread(SceSize args, void *argp)
 				break;
 			case REMOVE_DIR:
 				ksceIoRmdir(io_request.file);
+				break;
+			case CREATE_DIR:
+				ksceIoMkdir(io_request.file, 0777);
 				break;
 			default:
 				break;
@@ -82,6 +86,11 @@ static void removeFile(const char* file){
 static void removeDir(const char* dir){
 	io_request.file = dir;
 	execIoOp(REMOVE_DIR);
+}
+
+static void createDir(const char* dir){
+	io_request.file = dir;
+	execIoOp(CREATE_DIR);
 }
 
 static char log_file[64];
@@ -137,43 +146,6 @@ SceUID ksceIoOpen2_patched(SceUID pid, const char* file, int flags, SceMode mode
 	
 }
 
-SceUID ksceIoOpenAsync_patched(const char* file, int flags, SceMode mode) {
-	
-	SceUID ret = TAI_CONTINUE(SceUID, refs[2], file, flags, mode);
-
-	// Attempting to access savedata, redirecting it
-	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
-		LOG("Redirecting %s to %s via ksceIoOpenAsync (flags: 0x%X, fd: %d)", file, fname, flags, ret);
-	}
-	
-	return ret;
-	
-}
-
-typedef struct ksceIoOpen3_args{
-	const char *file;
-	int flags;
-	SceMode mode;
-}ksceIoOpen3_args;
-
-SceUID ksceIoOpen3_patched(ksceIoOpen3_args* args) {
-	
-	SceUID ret = 0;
-	const char* file = args->file;
-	int flags = args->flags;
-	
-	// Attempting to access savedata, redirecting it
-	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
-		ret = openFile(fname, flags);
-		LOG("Redirecting %s to %s via ksceIoOpen3 (flags: 0x%X, fd: %d)", file, fname, flags, ret);
-	}else ret = TAI_CONTINUE(SceUID, refs[3], args);
-	
-	return ret;
-	
-}
-
 SceUID ksceKernelLaunchApp_patched(char *tid, uint32_t flags, char *path, void *unk) {
 	
 	// Not interested in SceShell and other Sony apps
@@ -181,19 +153,61 @@ SceUID ksceKernelLaunchApp_patched(char *tid, uint32_t flags, char *path, void *
 		sprintf(titleid, tid);
 	
 		// Creating savegames directories if they do not exist
-		ksceIoMkdir("ux0:/data/savegames", 0777);
+		createDir("ux0:/data/savegames");
 		sprintf(fname, "ux0:/data/savegames/%s", tid);
-		ksceIoMkdir(fname, 0777);
+		createDir(fname);
 		int i;
 		for (i=0;i<=9;i++){
 			sprintf(fname, "ux0:/data/savegames/%s/SLOT%d", tid, i);
-			ksceIoMkdir(fname, 0777);
+			createDir(fname);
 			sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/sce_sys", tid, i);
-			ksceIoMkdir(fname, 0777);
+			createDir(fname);
 		}
 	}
 	
-	return TAI_CONTINUE(SceUID, refs[4], tid, flags, path, unk);
+	return TAI_CONTINUE(SceUID, refs[2], tid, flags, path, unk);
+}
+
+int ksceIoRemove_patched(const char *file) {
+	
+	SceUID ret = 0;
+	
+	// Attempting to access savedata, redirecting it
+	if (strncmp(file, "savedata0:", 10) == 0){
+		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		removeFile(fname);
+		LOG("Redirecting %s to %s via ksceIoRemove", file, fname);
+	}else ret = TAI_CONTINUE(int, refs[3], file);
+	
+	return ret;
+}
+
+int ksceIoRmdir_patched(const char *file) {
+	
+	SceUID ret = 0;
+	
+	// Attempting to access savedata, redirecting it
+	if (strncmp(file, "savedata0:", 10) == 0){
+		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		removeDir(fname);
+		LOG("Redirecting %s to %s via ksceIoRmdir", file, fname);
+	}else ret = TAI_CONTINUE(int, refs[4], file);
+	
+	return ret;
+}
+
+int ksceIoMkdir_patched(const char *file, SceMode mode) {
+	
+	SceUID ret = 0;
+	
+	// Attempting to access savedata, redirecting it
+	if (strncmp(file, "savedata0:", 10) == 0){
+		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		createDir(fname);
+		LOG("Redirecting %s to %s via ksceIoMkdir", file, fname);
+	}else ret = TAI_CONTINUE(int, refs[5], file, mode);
+	
+	return ret;
 }
 
 void _start() __attribute__ ((weak, alias ("module_start")));
@@ -211,9 +225,10 @@ int module_start(SceSize argc, const void *args) {
 
 	hookFunctionExport(0x75192972,ksceIoOpen_patched,"SceIofilemgr");
 	hookFunctionExport(0xC3D34965,ksceIoOpen2_patched,"SceIofilemgr");
-	hookFunctionExport(0x451001DE,ksceIoOpenAsync_patched,"SceIofilemgr");
-	hookFunctionExport(0x0E518FA9,ksceIoOpen3_patched,"SceIofilemgr");
 	hookFunctionExport(0x71CF71FD,ksceKernelLaunchApp_patched,"SceProcessmgr");
+	hookFunctionExport(0x0D7BB3E1,ksceIoRemove_patched,"SceIofilemgr");
+	hookFunctionExport(0x1CC9C634,ksceIoRmdir_patched,"SceIofilemgr");
+	hookFunctionExport(0x7F710B25,ksceIoMkdir_patched,"SceIofilemgr");
 	
 	return SCE_KERNEL_START_SUCCESS;
 }
