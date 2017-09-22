@@ -6,7 +6,7 @@
 #include <libk/string.h>
 #include <psp2/apputil.h>
 
-#define HOOKS_NUM   8      // Hooked functions num
+#define HOOKS_NUM   12      // Hooked functions num
 #define BUFFER_SIZE 2048   // Kernel buffer size
 #define MOUNTPOINT  "ux0"  // Mountpoint to use
 
@@ -21,6 +21,16 @@ typedef struct SceAppMgrSaveDataData {
 	unsigned int* requiredSizeKB;
 } SceAppMgrSaveDataData;
 
+typedef struct SceAppMgrSaveDataTrash {
+	int size; // 0x44
+	unsigned int slotId;
+	SceAppUtilSaveDataSlotParam* slotParam;
+	uint8_t reserved[32];
+	SceAppUtilSaveDataRemoveItem* files;
+	int fileNum;
+	SceAppUtilSaveDataMountPoint* mountPoint;
+} SceAppMgrSaveDataTrash;
+
 typedef struct SceAppMgrSaveDataSlot {
 	int size; // 0x418
 	unsigned int slotId;
@@ -29,6 +39,12 @@ typedef struct SceAppMgrSaveDataSlot {
 	SceAppUtilSaveDataMountPoint* mountPoint;
 } SceAppMgrSaveDataSlot;
 
+typedef struct SceAppMgrSaveDataSlotTrash {
+	int size; // 0x18
+	unsigned int slotId;
+	SceAppUtilSaveDataMountPoint* mountPoint;
+} SceAppMgrSaveDataSlotTrash;
+
 static uint8_t current_hook = 0;
 static SceUID hooks[HOOKS_NUM];
 static tai_hook_ref_t refs[HOOKS_NUM];
@@ -36,9 +52,12 @@ static char titleid[16];
 static char fname[256], kfile[256];
 static uint8_t workslot = 0;
 static SceAppUtilSaveDataFile file;
+static SceAppUtilSaveDataRemoveItem ktfile;
 static SceAppUtilSaveDataSlotParam kslot;
 static SceAppMgrSaveDataData kdata;
 static SceAppMgrSaveDataSlot kslot2;
+static SceAppMgrSaveDataTrash ktrash;
+static SceAppMgrSaveDataSlotTrash ktslot;
 static uint8_t kbuffer[BUFFER_SIZE];
 
 #define OPEN_FILE   0
@@ -303,6 +322,86 @@ int sceAppMgrSaveDataSlotGetParam2_patched(SceAppMgrSaveDataSlot* data) {
 	
 }
 
+int sceAppMgrSaveDataSlotSetParam2_patched(SceAppMgrSaveDataSlot* data) {
+	
+	uint32_t state;
+	ENTER_SYSCALL(state);
+	ksceKernelMemcpyUserToKernel(&kslot2, (uintptr_t)data, sizeof(SceAppMgrSaveDataSlot));
+	sprintf(fname, "%s:/data/savegames/%s/SLOT%d/SlotParam_%u.bin", MOUNTPOINT, titleid, workslot, kslot2.slotId);
+	SceUID fd = openFile(fname, SCE_O_WRONLY);
+	if (fd < 0) return SCE_APPUTIL_ERROR_SAVEDATA_SLOT_NOT_FOUND;
+	else{
+		ksceIoWrite(fd, (uint8_t*)&kslot2.slotParam, sizeof(SceAppUtilSaveDataSlotParam));
+		ksceIoClose(fd);	
+	}
+	EXIT_SYSCALL(state);
+	
+	return 0;
+}
+
+int sceAppMgrSaveDataDataRemove2_patched(SceAppMgrSaveDataTrash* data) {
+	
+	uint32_t state;
+	ENTER_SYSCALL(state);
+	ksceKernelMemcpyUserToKernel(&ktrash, (uintptr_t)data, sizeof(SceAppMgrSaveDataTrash));
+	
+	// Removing savedata files
+	int fileIdx = 0;
+	while (fileIdx < ktrash.fileNum){
+		ksceKernelMemcpyUserToKernel(&ktfile, (uintptr_t)(ktrash.files + fileIdx * sizeof(SceAppUtilSaveDataRemoveItem)), sizeof(SceAppUtilSaveDataRemoveItem));
+		ksceKernelStrncpyUserToKernel(kfile, (uintptr_t)(ktfile.dataPath), 64);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, kfile);
+		switch (ktfile.mode){
+			case SCE_APPUTIL_SAVEDATA_DATA_REMOVE_MODE_DEFAULT:
+				removeFile(fname);
+				break;
+			default:
+				removeDir(fname);
+				break;
+		}
+		fileIdx++;
+	}
+	
+	// Deleting slot param file
+	sprintf(fname, "%s:/data/savegames/%s/SLOT%d/SlotParam_%u.bin", MOUNTPOINT, titleid, workslot, ktrash.slotId);
+	removeFile(fname);
+	
+	EXIT_SYSCALL(state);
+	
+	return 0;
+}
+
+int sceAppMgrSaveDataSlotDelete2_patched(SceAppMgrSaveDataSlotTrash* data) {
+	
+	uint32_t state;
+	ENTER_SYSCALL(state);
+	ksceKernelMemcpyUserToKernel(&ktslot, (uintptr_t)data, sizeof(SceAppMgrSaveDataSlotTrash));
+	
+	// Removing slot param file
+	sprintf(fname, "%s:/data/savegames/%s/SLOT%d/SlotParam_%u.bin", MOUNTPOINT, titleid, workslot, ktslot.slotId);
+	removeFile(fname);
+	EXIT_SYSCALL(state);
+	
+	return 0;
+}
+
+int sceAppMgrSaveDataSlotCreate2_patched(SceAppMgrSaveDataSlot* data) {
+	
+	uint32_t state;
+	ENTER_SYSCALL(state);
+	ksceKernelMemcpyUserToKernel(&kslot2, (uintptr_t)data, sizeof(SceAppMgrSaveDataSlot));
+	sprintf(fname, "%s:/data/savegames/%s/SLOT%d/SlotParam_%u.bin", MOUNTPOINT, titleid, workslot, kslot2.slotId);
+	SceUID fd = openFile(fname, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC);
+	if (fd < 0) return SCE_APPUTIL_ERROR_SAVEDATA_SLOT_NOT_FOUND;
+	else{
+		ksceIoWrite(fd, (uint8_t*)&kslot2.slotParam, sizeof(SceAppUtilSaveDataSlotParam));
+		ksceIoClose(fd);	
+	}
+	EXIT_SYSCALL(state);
+	
+	return 0;
+}
+
 void _start() __attribute__ ((weak, alias ("module_start")));
 int module_start(SceSize argc, const void *args) {
 	
@@ -324,6 +423,10 @@ int module_start(SceSize argc, const void *args) {
 	hookFunctionExport(0x7F710B25,ksceIoMkdir_patched,"SceIofilemgr");
 	hookFunctionExport(0xB81777B7,sceAppMgrSaveDataDataSave2_patched,"SceAppMgr");
 	hookFunctionExport(0x74D789E2,sceAppMgrSaveDataSlotGetParam2_patched,"SceAppMgr");
+	hookFunctionExport(0x0E216486,sceAppMgrSaveDataSlotSetParam2_patched,"SceAppMgr");
+	hookFunctionExport(0xA579A39E,sceAppMgrSaveDataDataRemove2_patched,"SceAppMgr");
+	hookFunctionExport(0x191CF6B1,sceAppMgrSaveDataSlotDelete2_patched,"SceAppMgr");
+	hookFunctionExport(0xC48833AA,sceAppMgrSaveDataSlotCreate2_patched,"SceAppMgr");
 	
 	return SCE_KERNEL_START_SUCCESS;
 }
