@@ -17,7 +17,7 @@ typedef struct SceAppMgrSaveDataData {
 	uint8_t reserved[32];
 	SceAppUtilSaveDataFile* files;
 	int fileNum;
-	SceAppUtilSaveDataMountPoint* mountPoint;
+	SceAppUtilSaveDataMountPoint mountPoint;
 	unsigned int* requiredSizeKB;
 } SceAppMgrSaveDataData;
 
@@ -28,21 +28,21 @@ typedef struct SceAppMgrSaveDataTrash {
 	uint8_t reserved[32];
 	SceAppUtilSaveDataRemoveItem* files;
 	int fileNum;
-	SceAppUtilSaveDataMountPoint* mountPoint;
+	SceAppUtilSaveDataMountPoint mountPoint;
 } SceAppMgrSaveDataTrash;
 
 typedef struct SceAppMgrSaveDataSlot {
 	int size; // 0x418
 	unsigned int slotId;
 	SceAppUtilSaveDataSlotParam slotParam;
-	uint32_t reserved[116];
-	SceAppUtilSaveDataMountPoint* mountPoint;
+	uint8_t reserved[116];
+	SceAppUtilSaveDataMountPoint mountPoint;
 } SceAppMgrSaveDataSlot;
 
 typedef struct SceAppMgrSaveDataSlotTrash {
 	int size; // 0x18
 	unsigned int slotId;
-	SceAppUtilSaveDataMountPoint* mountPoint;
+	SceAppUtilSaveDataMountPoint mountPoint;
 } SceAppMgrSaveDataSlotTrash;
 
 static uint8_t current_hook = 0;
