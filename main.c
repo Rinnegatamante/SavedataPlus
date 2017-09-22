@@ -4,15 +4,42 @@
 #include <libk/stdio.h>
 #include <libk/stdarg.h>
 #include <libk/string.h>
+#include <psp2/apputil.h>
 
-#define HOOKS_NUM   6      // Hooked functions num
+#define HOOKS_NUM   8      // Hooked functions num
+#define BUFFER_SIZE 2048   // Kernel buffer size
+#define MOUNTPOINT  "ux0"  // Mountpoint to use
+
+typedef struct SceAppMgrSaveDataData {
+	int size; // 0x4C
+	unsigned int slotId;
+	SceAppUtilSaveDataSlotParam* slotParam;
+	uint8_t reserved[32];
+	SceAppUtilSaveDataFile* files;
+	int fileNum;
+	SceAppUtilSaveDataMountPoint* mountPoint;
+	unsigned int* requiredSizeKB;
+} SceAppMgrSaveDataData;
+
+typedef struct SceAppMgrSaveDataSlot {
+	int size; // 0x418
+	unsigned int slotId;
+	SceAppUtilSaveDataSlotParam slotParam;
+	uint32_t reserved[116];
+	SceAppUtilSaveDataMountPoint* mountPoint;
+} SceAppMgrSaveDataSlot;
 
 static uint8_t current_hook = 0;
 static SceUID hooks[HOOKS_NUM];
 static tai_hook_ref_t refs[HOOKS_NUM];
 static char titleid[16];
-static char fname[256];
+static char fname[256], kfile[256];
 static uint8_t workslot = 0;
+static SceAppUtilSaveDataFile file;
+static SceAppUtilSaveDataSlotParam kslot;
+static SceAppMgrSaveDataData kdata;
+static SceAppMgrSaveDataSlot kslot2;
+static uint8_t kbuffer[BUFFER_SIZE];
 
 #define OPEN_FILE   0
 #define REMOVE_FILE 1
@@ -103,7 +130,7 @@ void LOG(char* format, ...){
 	va_end(va);
 	
 	SceUID fd;
-	sprintf(log_file, "ux0:/data/%s.log", titleid);
+	sprintf(log_file, "%s:/data/%s.log", MOUNTPOINT, titleid);
 	fd = openFile(log_file, SCE_O_WRONLY | SCE_O_APPEND | SCE_O_CREAT);
 	ksceIoWrite(fd, str, strlen(str));
 	ksceIoWrite(fd, "\n", 1);
@@ -116,13 +143,24 @@ void hookFunctionExport(uint32_t nid, const void *func, const char* module){
 	current_hook++;
 }
 
+void bufferedWrite(SceUID fd, SceOff offs, uint8_t* buf, int size){
+	ksceIoLseek(fd, offs, SEEK_SET);
+	int i = 0;
+	while (i < size){
+		int bufsize = (i + BUFFER_SIZE > size) ? (size - i) : BUFFER_SIZE;
+		ksceKernelMemcpyUserToKernel(kbuffer, (uintptr_t)(buf + i), bufsize);
+		ksceIoWrite(fd, kbuffer, bufsize);
+		i += bufsize;
+	}
+}
+
 SceUID ksceIoOpen_patched(const char* file, int flags, SceMode mode) {
 	
 	SceUID ret = 0;
 
 	// Attempting to access savedata, redirecting it
 	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		ret = openFile(fname, flags);
 		LOG("Redirecting %s to %s via ksceIoOpen (flags: 0x%X, fd: 0x%X)", file, fname, flags, ret);
 	}else ret = TAI_CONTINUE(SceUID, refs[0], file, flags, mode);
@@ -137,7 +175,7 @@ SceUID ksceIoOpen2_patched(SceUID pid, const char* file, int flags, SceMode mode
 	
 	// Attempting to access savedata, redirecting it
 	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		ret = openFile(fname, flags);
 		LOG("Redirecting %s to %s via ksceIoOpen2 (flags: 0x%X, fd: 0x%X)", file, fname, flags, ret);
 	}else ret = TAI_CONTINUE(SceUID, refs[1], pid, file, flags, mode);
@@ -153,12 +191,13 @@ SceUID ksceKernelLaunchApp_patched(char *tid, uint32_t flags, char *path, void *
 		sprintf(titleid, tid);
 	
 		// Creating savegames directories if they do not exist
-		createDir("ux0:/data/savegames");
-		sprintf(fname, "ux0:/data/savegames/%s", tid);
+		sprintf(fname, "%s:/data/savegames", MOUNTPOINT);
+		createDir(fname);
+		sprintf(fname, "%s:/data/savegames/%s", MOUNTPOINT, tid);
 		createDir(fname);
 		int i;
 		for (i=0;i<=9;i++){
-			sprintf(fname, "ux0:/data/savegames/%s/SLOT%d", tid, i);
+			sprintf(fname, "%s:/data/savegames/%s/SLOT%d", MOUNTPOINT, tid, i);
 			createDir(fname);
 		}
 	}
@@ -172,7 +211,7 @@ int ksceIoRemove_patched(const char *file) {
 	
 	// Attempting to access savedata, redirecting it
 	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		removeFile(fname);
 		LOG("Redirecting %s to %s via ksceIoRemove", file, fname);
 	}else ret = TAI_CONTINUE(int, refs[3], file);
@@ -186,7 +225,7 @@ int ksceIoRmdir_patched(const char *file) {
 	
 	// Attempting to access savedata, redirecting it
 	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		removeDir(fname);
 		LOG("Redirecting %s to %s via ksceIoRmdir", file, fname);
 	}else ret = TAI_CONTINUE(int, refs[4], file);
@@ -200,12 +239,68 @@ int ksceIoMkdir_patched(const char *file, SceMode mode) {
 	
 	// Attempting to access savedata, redirecting it
 	if (strncmp(file, "savedata0:", 10) == 0){
-		sprintf(fname, "ux0:/data/savegames/%s/SLOT%d/%s", titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, (file[10] == '/') ? &file[11] : &file[10]);
 		createDir(fname);
 		LOG("Redirecting %s to %s via ksceIoMkdir", file, fname);
 	}else ret = TAI_CONTINUE(int, refs[5], file, mode);
 	
 	return ret;
+}
+
+int sceAppMgrSaveDataDataSave2_patched(SceAppMgrSaveDataData* data) {
+	
+	// Writing savedata files
+	uint32_t state;
+	ENTER_SYSCALL(state);
+	ksceKernelMemcpyUserToKernel(&kdata, (uintptr_t)data, sizeof(SceAppMgrSaveDataData));
+	SceUID fd;
+	uint32_t fileIdx = 0;
+	while (fileIdx < kdata.fileNum){	
+		ksceKernelMemcpyUserToKernel(&file, (uintptr_t)(kdata.files + fileIdx * sizeof(SceAppUtilSaveDataFile)), sizeof(SceAppUtilSaveDataFile));
+		ksceKernelStrncpyUserToKernel(kfile, (uintptr_t)(file.filePath), 64);
+		sprintf(fname, "%s:/data/savegames/%s/SLOT%d/%s", MOUNTPOINT, titleid, workslot, kfile);
+		switch (file.mode){
+			case SCE_APPUTIL_SAVEDATA_DATA_SAVE_MODE_FILE:
+				fd = openFile(fname, SCE_O_WRONLY | SCE_O_CREAT);
+				bufferedWrite(fd, file.offset, file.buf, file.bufSize);
+				ksceIoClose(fd);
+				break;
+			default:
+				createDir(fname);
+				break;
+		}
+		fileIdx++;
+	}
+	
+	// Writing slot param file
+	sprintf(fname, "%s:/data/savegames/%s/SLOT%d/SlotParam_%u.bin", MOUNTPOINT, titleid, workslot, kdata.slotId);
+	fd = openFile(fname, SCE_O_WRONLY | SCE_O_CREAT);
+	ksceKernelMemcpyUserToKernel(&kslot, (uintptr_t)(kdata.slotParam), sizeof(SceAppUtilSaveDataSlotParam));
+	ksceIoWrite(fd, (uint8_t*)&kslot, sizeof(SceAppUtilSaveDataSlotParam));
+	ksceIoClose(fd);
+	EXIT_SYSCALL(state);
+	
+	return 0;
+	
+}
+
+int sceAppMgrSaveDataSlotGetParam2_patched(SceAppMgrSaveDataSlot* data) {
+	
+	uint32_t state;
+	ENTER_SYSCALL(state);
+	ksceKernelMemcpyUserToKernel(&kslot2, (uintptr_t)data, sizeof(SceAppMgrSaveDataSlot));
+	sprintf(fname, "%s:/data/savegames/%s/SLOT%d/SlotParam_%u.bin", MOUNTPOINT, titleid, workslot, kslot2.slotId);
+	SceUID fd = fd = openFile(fname, SCE_O_RDONLY);
+	if (fd < 0) return SCE_APPUTIL_ERROR_SAVEDATA_SLOT_NOT_FOUND;
+	else{
+		ksceIoRead(fd, (uint8_t*)&kslot, sizeof(SceAppUtilSaveDataSlotParam));
+		ksceIoClose(fd);	
+	}
+	ksceKernelMemcpyKernelToUser((uintptr_t)&data->slotParam, &kslot, sizeof(SceAppUtilSaveDataSlotParam));
+	EXIT_SYSCALL(state);
+	
+	return 0;
+	
 }
 
 void _start() __attribute__ ((weak, alias ("module_start")));
@@ -227,6 +322,8 @@ int module_start(SceSize argc, const void *args) {
 	hookFunctionExport(0x0D7BB3E1,ksceIoRemove_patched,"SceIofilemgr");
 	hookFunctionExport(0x1CC9C634,ksceIoRmdir_patched,"SceIofilemgr");
 	hookFunctionExport(0x7F710B25,ksceIoMkdir_patched,"SceIofilemgr");
+	hookFunctionExport(0xB81777B7,sceAppMgrSaveDataDataSave2_patched,"SceAppMgr");
+	hookFunctionExport(0x74D789E2,sceAppMgrSaveDataSlotGetParam2_patched,"SceAppMgr");
 	
 	return SCE_KERNEL_START_SUCCESS;
 }
